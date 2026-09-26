@@ -1,0 +1,136 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #f4f6f8;
+  color: #222;
+}
+
+header {
+  padding: 16px 24px;
+  background: #1f2937;
+  color: #fff;
+}
+
+header h1 { margin: 0; font-size: 20px; }
+
+.banner {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  background: #92400e;
+  color: #fff;
+}
+
+.banner.info { background: #1d4ed8; }
+
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+  padding: 16px 24px;
+}
+
+.panel {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.panel h2 { margin: 0 0 12px; font-size: 16px; }
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+button:hover { background: #1d4ed8; }
+button:disabled { background: #9ca3af; cursor: not-allowed; }
+
+select, input[type="text"] {
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.tag {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  font-size: 13px;
+}
+
+.tag.granted { background: #d1fae5; color: #065f46; }
+.tag.denied { background: #fee2e2; color: #991b1b; }
+
+.screens-list { font-size: 14px; }
+
+.screen-item {
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+
+.screen-item .primary { color: #2563eb; font-weight: 600; }
+
+.windows-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.windows-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.windows-list li .closed { color: #991b1b; }
+
+.windows-list button {
+  padding: 2px 10px;
+  font-size: 12px;
+  background: #6b7280;
+}
+
+.message {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.message.error { background: #fee2e2; color: #991b1b; }
+.message.ok { background: #d1fae5; color: #065f46; }
+
+canvas {
+  width: 100%;
+  max-width: 640px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #111827;
+}
+
+.hidden { display: none; }
