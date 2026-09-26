@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>多窗口布局管理器</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <h1>多窗口布局管理器</h1>
+    <p class="subtitle">Window Management API + Permissions API + IndexedDB + Canvas</p>
+  </header>
+
+  <main>
+    <section class="panel" id="permission-panel">
+      <h2>1. 权限与屏幕</h2>
+      <div class="row">
+        <button id="btn-request-permission">申请 Window Management 权限</button>
+        <span id="permission-status" class="badge badge-unknown">未查询</span>
+      </div>
+      <div id="support-warning" class="warning hidden"></div>
+      <div id="screen-list" class="screen-list"></div>
+    </section>
+
+    <section class="panel">
+      <h2>2. 布局排列</h2>
+      <div class="row">
+        <label>窗口数量
+          <input id="window-count" type="number" min="1" max="12" value="4" />
+        </label>
+        <label>目标屏幕
+          <select id="target-screen"></select>
+        </label>
+      </div>
+      <div class="row">
+        <button class="layout-btn" data-layout="grid">网格布局</button>
+        <button class="layout-btn" data-layout="waterfall">瀑布布局</button>
+        <button class="layout-btn" data-layout="primary-secondary">主次布局</button>
+        <button id="btn-close-all" class="danger">关闭全部窗口</button>
+      </div>
+      <div id="bounds-warning" class="warning hidden"></div>
+    </section>
+
+    <section class="panel">
+      <h2>3. 布局预览（Canvas）</h2>
+      <canvas id="preview" width="860" height="360"></canvas>
+      <p class="hint">蓝框 = 屏幕可用区域；绿框 = 窗口；红框 = 越界窗口。点击预览中的窗口可将其激活到前台。</p>
+    </section>
+
+    <section class="panel">
+      <h2>4. 保存 / 恢复布局</h2>
+      <div class="row">
+        <input id="layout-name" type="text" placeholder="布局名称，如：双屏开发" />
+        <button id="btn-save-layout">保存当前布局</button>
+      </div>
+      <ul id="saved-layouts" class="saved-layouts"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>日志</h2>
+      <div id="log" class="log"></div>
+    </section>
+  </main>
+
+  <script src="js/store.js"></script>
+  <script src="js/screens.js"></script>
+  <script src="js/layouts.js"></script>
+  <script src="js/windows.js"></script>
+  <script src="js/preview.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
