@@ -3,71 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>多窗口布局管理器</title>
+  <title>通知与免打扰时段</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <header>
-    <h1>多窗口布局管理器</h1>
-    <p class="subtitle">Window Management API + Permissions API + IndexedDB + Canvas</p>
+    <h1>通知与免打扰时段</h1>
+    <p class="subtitle">Notification API + Permissions API + IndexedDB + Canvas（无框架）</p>
   </header>
 
   <main>
-    <section class="panel" id="permission-panel">
-      <h2>1. 权限与屏幕</h2>
+    <section class="panel">
+      <h2>1. 权限与运行环境</h2>
       <div class="row">
-        <button id="btn-request-permission">申请 Window Management 权限</button>
-        <span id="permission-status" class="badge badge-unknown">未查询</span>
+        <button id="btn-request-permission">申请通知权限</button>
+        <span id="permission-status" class="badge badge-unknown">检测中…</span>
       </div>
-      <div id="support-warning" class="warning hidden"></div>
-      <div id="screen-list" class="screen-list"></div>
+      <div id="env-warnings"></div>
+      <ul class="env-list">
+        <li>浏览器支持 Notification：<span id="env-notification" class="kv">—</span></li>
+        <li>安全上下文（HTTPS / localhost）：<span id="env-secure" class="kv">—</span></li>
+        <li>Permissions API：<span id="env-permissions" class="kv">—</span></li>
+        <li>IndexedDB：<span id="env-idb" class="kv">—</span></li>
+        <li>当前时区：<span id="env-timezone" class="kv">—</span></li>
+      </ul>
+      <p class="hint">权限申请必须由用户手势触发；拒绝后按钮仍可再次点击，由浏览器决定是否允许重新授权。</p>
     </section>
 
     <section class="panel">
-      <h2>2. 布局排列</h2>
+      <h2>2. 发送通知</h2>
       <div class="row">
-        <label>窗口数量
-          <input id="window-count" type="number" min="1" max="12" value="4" />
+        <label class="grow">标题
+          <input id="notif-title" type="text" value="提醒：该休息啦" maxlength="60" />
         </label>
-        <label>目标屏幕
-          <select id="target-screen"></select>
+      </div>
+      <div class="row">
+        <label class="grow">正文
+          <input id="notif-body" type="text" value="站起来活动一下，喝口水吧。" maxlength="200" />
         </label>
       </div>
       <div class="row">
-        <button class="layout-btn" data-layout="grid">网格布局</button>
-        <button class="layout-btn" data-layout="waterfall">瀑布布局</button>
-        <button class="layout-btn" data-layout="primary-secondary">主次布局</button>
-        <button id="btn-close-all" class="danger">关闭全部窗口</button>
+        <label><input id="notif-icon" type="checkbox" checked /> 使用默认图标</label>
+        <label><input id="notif-force" type="checkbox" /> 免打扰时段内也发送</label>
+        <button id="btn-send">发送通知</button>
       </div>
-      <div id="bounds-warning" class="warning hidden"></div>
+      <p class="hint">发送失败（系统繁忙 / 抛错）会指数退避重试最多 3 次；不支持时降级为页内卡片通知。</p>
     </section>
 
-    <section class="panel">
-      <h2>3. 布局预览（Canvas）</h2>
-      <canvas id="preview" width="860" height="360"></canvas>
-      <p class="hint">蓝框 = 屏幕可用区域；绿框 = 窗口；红框 = 越界窗口。点击预览中的窗口可将其激活到前台。</p>
-    </section>
-
-    <section class="panel">
-      <h2>4. 保存 / 恢复布局</h2>
+    <section class="panel panel-wide">
+      <h2>3. 免打扰时段（DND）</h2>
       <div class="row">
-        <input id="layout-name" type="text" placeholder="布局名称，如：双屏开发" />
-        <button id="btn-save-layout">保存当前布局</button>
+        <label><input id="dnd-enabled" type="checkbox" checked /> 启用免打扰</label>
+        <label>开始 <input id="dnd-start" type="time" step="60" value="22:00" /></label>
+        <label>结束 <input id="dnd-end" type="time" step="60" value="08:00" /></label>
+        <span id="dnd-status" class="badge badge-unknown">—</span>
       </div>
-      <ul id="saved-layouts" class="saved-layouts"></ul>
+      <canvas id="dnd-canvas" width="860" height="96"></canvas>
+      <p class="hint">蓝色弧带 = 免打扰时段（支持跨天，如 22:00–08:00）；红色刻度 = 当前时刻。系统时区变化（含夏令时切换）会自动重算。</p>
     </section>
 
-    <section class="panel">
+    <section class="panel panel-wide">
+      <h2>4. 通知历史</h2>
+      <div class="row">
+        <button id="btn-clear-history" class="ghost">清空历史</button>
+        <span class="hint">点击列表中的通知可查看详情 / 触发点击回调。</span>
+      </div>
+      <ul id="history-list" class="history-list"></ul>
+    </section>
+
+    <section class="panel panel-wide">
       <h2>日志</h2>
       <div id="log" class="log"></div>
     </section>
   </main>
 
+  <!-- 降级通知容器：浏览器不支持 Notification 时在此渲染卡片 -->
+  <div id="fallback-stack" class="fallback-stack" aria-live="polite"></div>
+
   <script src="js/store.js"></script>
-  <script src="js/screens.js"></script>
-  <script src="js/layouts.js"></script>
-  <script src="js/windows.js"></script>
-  <script src="js/preview.js"></script>
+  <script src="js/dnd.js"></script>
+  <script src="js/notifier.js"></script>
+  <script src="js/timeline.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
