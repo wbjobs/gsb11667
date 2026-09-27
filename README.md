@@ -1,45 +1,43 @@
-# 多窗口布局管理器
+# 通知与免打扰管理
 
-基于 Window Management API + Permissions API + IndexedDB + Canvas 的多屏幕、多窗口布局管理工具。
+基于 Notification API + Permissions API + IndexedDB + Canvas 的通知发送与免打扰时段管理工具，无框架、无构建步骤。
 
 ## 运行
 
-静态站点，无构建步骤。需要通过 HTTP(S) 访问（Window Management API 要求安全上下文）：
+静态站点。系统通知要求安全上下文（HTTPS 或 localhost）。
 
 ```bash
 npx serve .        # 或 python3 -m http.server
 ```
 
-浏览器要求：Chrome / Edge 100+（Window Management API 仅 Chromium 系支持）。
-
 ## 功能
 
-- **权限申请**：点击按钮触发 `getScreenDetails()` 授权弹窗；Permissions API 查询并展示当前权限状态。
-- **屏幕枚举**：列出所有屏幕的分辨率、可用区域、原点坐标、缩放比、主屏标记；监听 `screenschange` 自动更新。
-- **窗口管理**：打开/关闭子窗口，周期检测手动关闭的窗口并更新布局与预览。
-- **布局算法**：网格、瀑布（级联回绕）、主次（2/3 主区 + 右侧均分）。
-- **保存/恢复**：布局以相对屏幕可用区域的坐标存入 IndexedDB；恢复时按目标屏幕等比缩放适配，窗口数不一致时按原布局类型重新计算。
-- **布局预览**：Canvas 按比例绘制所有屏幕与窗口目标矩形，越界窗口红色高亮。
+- **权限申请**：点击按钮触发 `Notification.requestPermission()`；Permissions API 查询并监听权限变化（撤销后状态自动更新）。
+- **发送通知**：共 3 次尝试（首次 + 重试 2 次），退避延迟 600ms / 1200ms；支持标题、正文、图标；点击回调更新历史为「已点击」。
+- **免打扰时段**：可添加多个时段，支持跨天（如 22:00 - 07:00）；时段内发送被拦截并记录「已拦截（免打扰）」。
+- **通知历史**：IndexedDB 持久化，记录 已发送 / 拦截 / 降级 / 失败 / 点击 状态，可清空。
+- **时段可视化**：Canvas 24 小时时间轴，免打扰段橙色高亮，当前时间红线，跨天时段拆成两段绘制。
 
-## 验收标准对照
+## 边界与异常处理
 
-| 标准 | 实现 |
+| 场景 | 处理 |
 | --- | --- |
-| 屏幕枚举准确 | `js/screens.js` 统一模型，含 avail 区域与 scaleFactor |
-| 三种布局正确 | `js/layouts.js`，纯函数可单测 |
-| 布局保存恢复 | `js/db.js` IndexedDB，相对坐标 + 跨屏缩放适配 |
-| 权限被拒提示 | banner 提示并降级单屏 |
-| 不支持时降级 | 检测 `getScreenDetails`，降级 `window.screen` 单屏 |
-| 多屏幕差异 | 负坐标原点、不同分辨率/缩放在布局与预览中正确处理 |
-| 窗口关闭更新 | 1s 轮询 `win.closed` + 手动关闭回调 |
-| 越界提示 | `findOutOfBounds` 检测，提示并自动钳制 |
-| 布局预览准确 | Canvas 按屏幕联合包围盒等比缩放绘制 |
+| 浏览器不支持 | 检测 `window.Notification`，banner 提示并降级为页面内 toast |
+| 非安全上下文 | isSecureContext 检测，同样降级 |
+| 权限被拒 | banner 提示去站点设置开启；发送时降级 toast |
+| 用户未交互 | `navigator.userActivation.isActive` 判断，无手势不调用申请，页面内提示 |
+| 免打扰跨天 | `start > end` 时按 `mins >= start \|\| mins < end` 判断 |
+| 时区变化 | 判断基于本地时间分量天然正确；每 30s 检测 `getTimezoneOffset()` 刷新可视化与状态 |
+| 发送失败 | 自动重试 2 次仍失败则记录「发送失败（已重试）」 |
+| 权限被撤销 | Permissions API `change` 事件，状态标签与 banner 实时更新 |
 
 ## 文件结构
 
 - `index.html` / `styles.css` — 页面与样式
 - `js/main.js` — 状态管理与交互编排
-- `js/screens.js` — 权限与屏幕枚举（含降级）
-- `js/layouts.js` — 布局算法与越界处理
-- `js/db.js` — IndexedDB 持久化
-- `js/preview.js` — Canvas 预览渲染
+- `js/permissions.js` — 环境检测、权限申请与撤销监听
+- `js/dnd.js` — 免打扰时段判断（纯函数，含跨天）
+- `js/notify.js` — 通知发送与失败重试
+- `js/db.js` — IndexedDB 持久化（历史 + 设置）
+
+- `js/timeline.js` — Canvas 24 小时时段可视化

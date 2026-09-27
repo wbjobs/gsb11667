@@ -3,61 +3,70 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>多窗口布局管理器</title>
+  <title>通知与免打扰管理</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header>
-    <h1>多窗口布局管理器</h1>
+    <h1>通知与免打扰管理</h1>
     <div id="support-banner" class="banner hidden"></div>
   </header>
 
   <main>
     <section class="panel">
-      <h2>权限与屏幕</h2>
+      <h2>通知权限</h2>
       <div class="row">
-        <button id="btn-permission">申请 Window Management 权限</button>
+        <button id="btn-permission">申请通知权限</button>
         <span id="permission-status" class="tag">未查询</span>
+        <span id="dnd-now" class="tag">免打扰：未生效</span>
       </div>
-      <div id="screens-list" class="screens-list"></div>
+      <div id="permission-hint" class="message hidden"></div>
     </section>
 
     <section class="panel">
-      <h2>窗口</h2>
+      <h2>发送通知</h2>
       <div class="row">
-        <button id="btn-open-window">打开新窗口</button>
-        <span id="window-count" class="tag">0 个子窗口</span>
+        <input id="notif-title" type="text" placeholder="标题" />
       </div>
-      <ul id="windows-list" class="windows-list"></ul>
+      <div class="row">
+        <input id="notif-body" type="text" placeholder="正文" />
+      </div>
+      <div class="row">
+        <input id="notif-icon" type="text" placeholder="图标 URL（可选）" />
+      </div>
+      <div class="row">
+        <button id="btn-send">发送通知</button>
+      </div>
+      <div id="send-message" class="message hidden"></div>
     </section>
 
     <section class="panel">
-      <h2>布局</h2>
+      <h2>免打扰时段</h2>
       <div class="row">
-        <select id="layout-type">
-          <option value="grid">网格布局</option>
-          <option value="waterfall">瀑布布局</option>
-          <option value="primary-secondary">主次布局</option>
-        </select>
-        <select id="target-screen"></select>
-        <button id="btn-apply">应用布局</button>
+        <input id="dnd-start" type="time" value="22:00" />
+        <span>至</span>
+        <input id="dnd-end" type="time" value="07:00" />
+        <button id="btn-add-dnd">添加时段</button>
       </div>
-      <div class="row">
-        <input id="layout-name" type="text" placeholder="布局名称" />
-        <button id="btn-save">保存布局</button>
-        <select id="saved-layouts"></select>
-        <button id="btn-restore">恢复布局</button>
-        <button id="btn-delete">删除</button>
-      </div>
-      <div id="layout-message" class="message hidden"></div>
+      <ul id="dnd-list" class="dnd-list"></ul>
+      <div class="muted">支持跨天时段（如 22:00 - 07:00）。按本地时间判断，时区变化后自动适配。</div>
     </section>
 
     <section class="panel">
-      <h2>布局预览</h2>
-      <canvas id="preview" width="640" height="400"></canvas>
+      <h2>免打扰可视化</h2>
+      <canvas id="dnd-canvas" width="640" height="120"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>通知历史</h2>
+      <div class="row">
+        <button id="btn-clear-history" class="secondary">清空历史</button>
+      </div>
+      <ul id="history-list" class="history-list"></ul>
     </section>
   </main>
 
+  <div id="toast-container"></div>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>
