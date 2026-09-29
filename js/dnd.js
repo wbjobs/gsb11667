@@ -76,12 +76,18 @@ const DND = (() => {
      页面 visibilitychange / focus 时立即复核；另起 10s 轮询兜底。 */
   function watchTimezone(onChange) {
     let offset = new Date().getTimezoneOffset();
+    let label = timezoneLabel();
     function check() {
       const current = new Date().getTimezoneOffset();
-      if (current !== offset) {
+      const currentLabel = timezoneLabel();
+      if (current !== offset || currentLabel !== label) {
+        const prevOffset = offset;
+        const prevLabel = label;
         offset = current;
+        label = currentLabel;
         try {
-          onChange({ oldOffset: offset, newOffset: current, timezone: timezoneLabel() });
+          onChange({ oldOffset: prevOffset, newOffset: current,
+                     oldTimezone: prevLabel, timezone: currentLabel });
         } catch (e) { console.error(e); }
       }
     }

@@ -1,302 +1,459 @@
-/* app.js — 应用主逻辑：权限、布局应用、保存恢复、日志 */
+/* app.js — 通知与免打扰：主逻辑与 UI 绑定
+   权限管理 / 发送（重试）/ 免打扰拦截 / 历史（IndexedDB）/ 时区变化重绘 */
 (() => {
   const $ = id => document.getElementById(id);
   const els = {
     permBtn: $('btn-request-permission'),
     permStatus: $('permission-status'),
-    supportWarning: $('support-warning'),
-    screenList: $('screen-list'),
-    windowCount: $('window-count'),
-    targetScreen: $('target-screen'),
-    boundsWarning: $('bounds-warning'),
-    closeAll: $('btn-close-all'),
-    layoutName: $('layout-name'),
-    saveBtn: $('btn-save-layout'),
-    savedList: $('saved-layouts'),
+    envWarnings: $('env-warnings'),
+    envNotification: $('env-notification'),
+    envSecure: $('env-secure'),
+    envPermissions: $('env-permissions'),
+    envIdb: $('env-idb'),
+    envTimezone: $('env-timezone'),
+    title: $('notif-title'),
+    body: $('notif-body'),
+    icon: $('notif-icon'),
+    force: $('notif-force'),
+    sendBtn: $('btn-send'),
+    dndEnabled: $('dnd-enabled'),
+    dndStart: $('dnd-start'),
+    dndEnd: $('dnd-end'),
+    dndStatus: $('dnd-status'),
+    canvas: $('dnd-canvas'),
+    clearHistoryBtn: $('btn-clear-history'),
+    historyList: $('history-list'),
     log: $('log')
   };
 
-  let lastAppliedRects = []; // 最近一次应用/预览的窗口矩形
+  const DEFAULT_SETTINGS = { enabled: true, start: '22:00', end: '08:00' };
+  let settings = { ...DEFAULT_SETTINGS };
+  let permStatusObj = null; // Permissions API 的 PermissionStatus（若可用）
 
   /* ---------- 日志 ---------- */
   function log(msg, cls = 'info') {
     const line = document.createElement('div');
-    line.className = cls;
+    line.className = 'log-' + cls;
     line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
     els.log.prepend(line);
   }
 
-  /* ---------- 权限状态 UI ---------- */
-  function renderPermission() {
-    const p = ScreenManager.state.permission;
+  /* ---------- 环境信息 ---------- */
+  function kv(el, text, cls) {
+    el.textContent = text;
+    el.className = 'kv' + (cls ? ' ' + cls : '');
+  }
+
+  function renderEnv() {
+    kv(els.envNotification,
+      Notifier.supported ? '支持' : '不支持',
+      Notifier.supported ? 'ok' : 'bad');
+    kv(els.envSecure,
+      Notifier.isSecureContext ? '是' : '否（Notification 在非安全上下文不可用）',
+      Notifier.isSecureContext ? 'ok' : 'bad');
+    kv(els.envPermissions,
+      Notifier.permissionsApiSupported ? '支持（可监听权限被撤销）' : '不支持（将轮询 Notification.permission）',
+      Notifier.permissionsApiSupported ? 'ok' : '');
+    kv(els.envIdb,
+      Store.indexedDBAvailable() ? '支持' : '不可用（历史将仅保存在内存）',
+      Store.indexedDBAvailable() ? 'ok' : 'bad');
+    kv(els.envTimezone, DND.timezoneLabel() +
+      `（UTC${formatOffset(-new Date().getTimezoneOffset())}）`);
+
+    const warnings = [];
+    if (!Notifier.supported) {
+      warnings.push(['当前浏览器不支持 Notification API，已自动降级为页内卡片通知（右下角弹窗）。', 'warn']);
+    } else if (!Notifier.isSecureContext) {
+      warnings.push(['当前不是安全上下文（需 HTTPS 或 localhost）。系统通知不可用，已降级为页内卡片通知。', 'warn']);
+    }
+    if (!Store.indexedDBAvailable()) {
+      warnings.push(['IndexedDB 不可用（隐私模式或 file:// 访问），通知历史仅保留在当前页面内存中。', 'info']);
+    }
+    els.envWarnings.innerHTML = '';
+    warnings.forEach(([text, kind]) => {
+      const div = document.createElement('div');
+      div.className = 'warning ' + (kind === 'info' ? 'info' : '');
+      div.textContent = text;
+      els.envWarnings.appendChild(div);
+    });
+  }
+
+  function formatOffset(minutes) {
+    const sign = minutes >= 0 ? '+' : '-';
+    const abs = Math.abs(minutes);
+    return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+  }
+
+  /* ---------- 权限状态 ---------- */
+  function renderPermission(state) {
+    const p = state || Notifier.permissionState();
     const map = {
       granted: ['已授权', 'badge-granted'],
       denied: ['已被拒绝', 'badge-denied'],
-      prompt: ['待用户确认', 'badge-prompt'],
+      prompt: ['待申请', 'badge-prompt'],
       unsupported: ['浏览器不支持', 'badge-denied'],
-      unknown: ['未查询', 'badge-unknown']
+      insecure: ['非安全上下文', 'badge-denied'],
+      unknown: ['未知', 'badge-unknown']
     };
     const [text, cls] = map[p] || map.unknown;
     els.permStatus.textContent = text;
-    els.permStatus.className = `badge ${cls}`;
+    els.permStatus.className = 'badge ' + cls;
 
-    if (!ScreenManager.state.supported) {
-      els.supportWarning.textContent =
-        '当前浏览器不支持 Window Management API（getScreenDetails）。\n' +
-        '已降级为单窗口模式：仅使用 window.screen 的当前屏幕信息，布局仍可在此屏幕内排列。\n' +
-        '建议使用 Chrome / Edge 100+ 并通过 HTTPS 或 localhost 访问。';
-      els.supportWarning.classList.remove('hidden');
-    } else if (p === 'denied') {
-      els.supportWarning.textContent =
-        'Window Management 权限被拒绝，无法枚举多屏幕。\n' +
-        '已降级为单窗口模式。可在浏览器地址栏左侧的站点设置中重新允许“窗口管理”权限后刷新。';
-      els.supportWarning.classList.remove('hidden');
+    els.permBtn.disabled = !Notifier.supported ||
+      (p === 'granted' || p === 'denied' || p === 'unsupported' || p === 'insecure');
+    if (p === 'denied') {
+      els.permBtn.title = '浏览器已记录拒绝决定。可在地址栏左侧的站点设置中重新允许通知权限，本页会自动检测到变更。';
+    } else if (p === 'insecure') {
+      els.permBtn.title = 'Notification 仅在安全上下文（HTTPS 或 localhost）中可用，请更换访问方式后刷新。';
     } else {
-      els.supportWarning.classList.add('hidden');
-    }
-  }
-
-  /* ---------- 屏幕列表 UI ---------- */
-  function renderScreens() {
-    const screens = ScreenManager.state.screens;
-    els.screenList.innerHTML = '';
-    els.targetScreen.innerHTML = '';
-    screens.forEach((s, i) => {
-      const item = document.createElement('div');
-      item.className = 'screen-item';
-      item.innerHTML =
-        `<span class="label">屏幕 ${i + 1}${s.isPrimary ? ' <span class="primary-tag">主屏</span>' : ''}</span>` +
-        `<span>名称：${s.label}</span>` +
-        `<span>可用区域：${s.width}×${s.height} @ (${s.left}, ${s.top})</span>` +
-        `<span>缩放：${s.devicePixelRatio}x</span>`;
-      els.screenList.appendChild(item);
-
-      const opt = document.createElement('option');
-      opt.value = String(i);
-      opt.textContent = `屏幕 ${i + 1}${s.isPrimary ? '（主屏）' : ''}`;
-      els.targetScreen.appendChild(opt);
-    });
-    log(`屏幕枚举更新：共 ${screens.length} 块屏幕` +
-      (screens.length > 1
-        ? `，多屏坐标系跨度 (${Math.min(...screens.map(s => s.left))}, ${Math.min(...screens.map(s => s.top))}) ~ ` +
-          `(${Math.max(...screens.map(s => s.left + s.width))}, ${Math.max(...screens.map(s => s.top + s.height))})`
-        : '（单屏/降级模式）'));
-  }
-
-  /* ---------- 预览刷新 ---------- */
-  function refreshPreview(violations = []) {
-    const openRects = WindowManager.getOpenWindows().map(m => m.rect);
-    const rects = lastAppliedRects.length ? lastAppliedRects : openRects;
-    Preview.update(ScreenManager.state.screens, rects, violations);
-  }
-
-  /* ---------- 应用布局 ---------- */
-  function applyLayout(type) {
-    const screens = ScreenManager.state.screens;
-    if (!screens.length) { log('没有可用屏幕信息', 'err'); return; }
-    const count = Math.max(1, Math.min(12, parseInt(els.windowCount.value, 10) || 1));
-    const screenIdx = Math.min(parseInt(els.targetScreen.value, 10) || 0, screens.length - 1);
-    const screen = screens[screenIdx];
-
-    let rects;
-    try {
-      rects = Layouts.compute(type, count, screen);
-    } catch (e) {
-      log(e.message, 'err');
-      return;
+      els.permBtn.title = '';
     }
 
-    // 越界检测（理论上算法不会越界，但多屏负坐标/缩放差异下仍做防御）
-    const check = Layouts.checkBounds(rects, screens);
-    if (!check.ok) {
-      els.boundsWarning.textContent =
-        `检测到 ${check.violations.length} 个窗口越界，已自动钳制到最近屏幕内。`;
-      els.boundsWarning.classList.remove('hidden');
-      log(`布局越界：${check.violations.length} 个窗口被钳制`, 'err');
-      rects = rects.map(r => Layouts.clampToScreens(r, screens));
+    if (p === 'denied') {
+      addWarning('通知权限已被拒绝。请点击地址栏左侧的站点信息图标，将“通知”改为允许；状态会自动刷新，无需重载页面。');
+      log('通知权限被拒绝：系统通知不可用，发送时将降级为页内卡片', 'warn');
     } else {
-      els.boundsWarning.classList.add('hidden');
-    }
-
-    const result = WindowManager.applyLayout(rects);
-    lastAppliedRects = rects;
-    refreshPreview(check.ok ? [] : check.violations.map(v => v.index));
-
-    log(`应用${typeName(type)}：目标屏幕 ${screenIdx + 1}，新开 ${result.opened}，移动 ${result.moved}，关闭 ${result.closed}` +
-      (result.failed ? `，失败 ${result.failed}（可能被弹窗拦截，请允许本站弹窗）` : ''),
-      result.failed ? 'err' : 'ok');
-    if (result.failed) {
-      els.boundsWarning.textContent = '部分窗口打开失败：浏览器可能拦截了弹窗，请在地址栏允许本站的弹出式窗口后重试。';
-      els.boundsWarning.classList.remove('hidden');
+      removeWarning('perm-denied');
     }
   }
 
-  function typeName(t) {
-    return { grid: '网格布局', waterfall: '瀑布布局', 'primary-secondary': '主次布局' }[t] || t;
+  function addWarning(text) {
+    if (document.getElementById('warning-perm-denied')) return;
+    const div = document.createElement('div');
+    div.id = 'warning-perm-denied';
+    div.className = 'warning';
+    div.textContent = text;
+    els.envWarnings.appendChild(div);
   }
 
-  /* ---------- 保存 / 恢复 ---------- */
-  async function saveLayout() {
-    const name = els.layoutName.value.trim();
-    if (!name) { log('请先输入布局名称', 'err'); return; }
-    const rects = WindowManager.getOpenWindows().map(m => m.rect);
-    if (!rects.length) { log('当前没有打开的窗口，无法保存布局', 'err'); return; }
-    const layout = {
-      name,
-      createdAt: Date.now(),
-      screenSignature: ScreenManager.signature(),
-      screens: ScreenManager.state.screens.map(({ internal, ...rest }) => rest),
-      windows: rects
+  function removeWarning(id) {
+    const div = document.getElementById('warning-' + id);
+    if (div) div.remove();
+  }
+
+  /* ---------- 免打扰设置 ---------- */
+  function isValidHHMM(v) { return DND.toMinutes(v) !== null; }
+
+  function readSettingsFromUI() {
+    return {
+      enabled: els.dndEnabled.checked,
+      start: els.dndStart.value || '00:00',
+      end: els.dndEnd.value || '00:00'
     };
+  }
+
+  async function saveSettings(next) {
+    settings = next;
+    Timeline.update(settings);
+    renderDndStatus();
     try {
-      await LayoutStore.save(layout);
-      log(`布局「${name}」已保存（${rects.length} 个窗口）`, 'ok');
-      els.layoutName.value = '';
-      renderSavedLayouts();
+      await Store.saveSettings(settings);
     } catch (e) {
-      log(`保存失败：${e.message}`, 'err');
+      log(`免打扰设置持久化失败（仅本次生效）：${e.message}`, 'warn');
     }
   }
 
-  async function restoreLayout(name) {
-    let layout;
-    try {
-      layout = await LayoutStore.get(name);
-    } catch (e) {
-      log(`读取失败：${e.message}`, 'err');
-      return;
-    }
-    if (!layout) { log(`布局「${name}」不存在`, 'err'); return; }
+  function renderDndStatus() {
+    const now = new Date();
+    const within = DND.isWithin(settings, now);
+    const transition = DND.nextTransition(settings, now);
 
-    const screens = ScreenManager.state.screens;
-    let rects = layout.windows;
-    const sameEnv = layout.screenSignature === ScreenManager.signature();
-    if (!sameEnv) {
-      log('当前屏幕环境与保存时不同（屏幕数量/分辨率/排列变化），窗口将钳制到最近屏幕', 'err');
-      els.boundsWarning.textContent =
-        '屏幕环境与保存该布局时不一致，部分窗口位置已自动适配到当前屏幕。';
-      els.boundsWarning.classList.remove('hidden');
+    if (!settings.enabled) {
+      els.dndStatus.textContent = '免打扰已关闭';
+      els.dndStatus.className = 'badge badge-unknown';
+    } else if (!isValidHHMM(settings.start) || !isValidHHMM(settings.end) ||
+               settings.start === settings.end) {
+      els.dndStatus.textContent = '时段设置无效（开始与结束相同或时间非法）';
+      els.dndStatus.className = 'badge badge-prompt';
+    } else if (within) {
+      els.dndStatus.textContent = '免打扰中' +
+        (transition ? `，还有 ${DND.describeCountdown(transition.at, now)} 结束` : '');
+      els.dndStatus.className = 'badge badge-denied';
+    } else {
+      els.dndStatus.textContent = '通知正常发送' +
+        (transition ? `，${DND.describeCountdown(transition.at, now)}后进入免打扰` : '');
+      els.dndStatus.className = 'badge badge-granted';
     }
-    // 无论环境是否一致都做越界检测与钳制，保证恢复结果可用
-    const check = Layouts.checkBounds(rects, screens);
-    if (!check.ok) {
-      els.boundsWarning.textContent =
-        `恢复的布局中有 ${check.violations.length} 个窗口越界，已自动钳制到屏幕内。`;
-      els.boundsWarning.classList.remove('hidden');
-      rects = rects.map(r => Layouts.clampToScreens(r, screens));
-    }
-
-    const result = WindowManager.applyLayout(rects);
-    lastAppliedRects = rects;
-    refreshPreview();
-    log(`恢复布局「${name}」：新开 ${result.opened}，移动 ${result.moved}` +
-      (result.failed ? `，失败 ${result.failed}（请允许弹窗）` : ''), result.failed ? 'err' : 'ok');
   }
 
-  async function renderSavedLayouts() {
-    els.savedList.innerHTML = '';
+  /* ---------- 通知历史 ---------- */
+  const STATUS_META = {
+    sent: { text: '已送达', cls: 'badge-granted' },
+    clicked: { text: '已点击', cls: 'badge-granted' },
+    blocked: { text: 'DND 已拦截', cls: 'badge-prompt' },
+    failed: { text: '发送失败（已重试）', cls: 'badge-denied' },
+    unsupported: { text: '页内卡片降级', cls: 'badge-unsupported' },
+    denied: { text: '权限未授予', cls: 'badge-denied' }
+  };
+
+  async function renderHistory() {
     let items = [];
     try {
-      items = await LayoutStore.list();
+      items = await Store.getAllHistory();
     } catch (e) {
-      log(e.message, 'err');
+      log(`读取历史失败：${e.message}`, 'err');
       return;
     }
+    els.historyList.innerHTML = '';
     if (!items.length) {
-      els.savedList.innerHTML = '<li class="meta">暂无已保存的布局</li>';
+      const li = document.createElement('li');
+      li.className = 'meta-empty';
+      li.textContent = '暂无通知记录';
+      els.historyList.appendChild(li);
       return;
     }
-    for (const item of items) {
+    items.forEach(item => {
       const li = document.createElement('li');
-      const envMatch = item.screenSignature === ScreenManager.signature();
-      li.innerHTML =
-        `<strong>${item.name}</strong>` +
-        `<span class="meta">${item.windows.length} 窗口 · ${new Date(item.createdAt).toLocaleString()}` +
-        `${envMatch ? '' : ' · ⚠ 屏幕环境已变化'}</span>`;
-      const restoreBtn = document.createElement('button');
-      restoreBtn.className = 'small';
-      restoreBtn.textContent = '恢复';
-      restoreBtn.onclick = () => restoreLayout(item.name);
-      const delBtn = document.createElement('button');
-      delBtn.className = 'small danger';
-      delBtn.textContent = '删除';
-      delBtn.onclick = async () => {
-        await LayoutStore.remove(item.name);
-        log(`布局「${item.name}」已删除`);
-        renderSavedLayouts();
-      };
-      li.append(restoreBtn, delBtn);
-      els.savedList.appendChild(li);
+      li.className = 'history-item' + (item.status === 'clicked' ? ' clicked' : '');
+
+      if (item.icon) {
+        const img = document.createElement('img');
+        img.className = 'history-icon';
+        img.alt = '';
+        img.src = item.icon;
+        img.onerror = () => img.remove();
+        li.appendChild(img);
+      }
+
+      const main = document.createElement('div');
+      main.className = 'history-main';
+      const title = document.createElement('div');
+      title.className = 'history-title';
+      title.textContent = item.title || '（无标题）';
+      const body = document.createElement('div');
+      body.className = 'history-body';
+      body.textContent = item.body || '';
+      const meta = document.createElement('div');
+      meta.className = 'history-meta';
+      const metaInfo = STATUS_META[item.status] || { text: item.status, cls: 'badge-unknown' };
+      meta.textContent = `${new Date(item.createdAt).toLocaleString()} · 尝试 ${item.attempts || 0} 次` +
+        (item.error ? ` · ${item.error}` : '');
+      main.append(title, body, meta);
+
+      const badge = document.createElement('span');
+      badge.className = 'badge ' + metaInfo.cls;
+      badge.textContent = metaInfo.text;
+
+      li.append(main, badge);
+      li.addEventListener('click', () => activateHistoryItem(item));
+      els.historyList.appendChild(li);
+    });
+  }
+
+  /* 点击历史项：触发点击回调并更新状态 */
+  async function activateHistoryItem(item) {
+    log(`触发通知点击回调：「${item.title}」`, 'ok');
+    if (typeof item.data === 'object' && item.data && item.data.url) {
+      log(`回调数据中包含 url=${item.data.url}（演示环境不自动跳转）`);
     }
+    if (item.status !== 'clicked') {
+      try {
+        await Store.updateHistory(item.id, { status: 'clicked', clickedAt: Date.now() });
+      } catch (e) { /* ignore */ }
+      renderHistory();
+    }
+  }
+
+  /* ---------- 发送通知 ---------- */
+  function buildRecord(title, body, icon) {
+    return {
+      id: Notifier.uid(),
+      title, body, icon,
+      tag: 'app-notification',
+      data: { source: 'notification-dnd-demo', url: '#callback-demo', createdAt: Date.now() },
+      createdAt: Date.now(),
+      status: 'sent',
+      attempts: 0
+    };
+  }
+
+  function persistRecord(record, patch) {
+    Object.assign(record, patch || {});
+    return Store.addHistory(record).catch(e => log(`历史写入失败：${e.message}`, 'warn'))
+      .then(() => renderHistory());
+  }
+
+  async function handleSend() {
+    const title = els.title.value.trim();
+    const body = els.body.value.trim();
+    if (!title) { log('请填写通知标题', 'err'); return; }
+
+    const force = els.force.checked;
+    const now = new Date();
+    const within = DND.isWithin(settings, now);
+
+    if (within && !force) {
+      const record = buildRecord(title, body, getIcon());
+      await persistRecord(record, { status: 'blocked', attempts: 0 });
+      log(`当前处于免打扰时段，通知「${title}」已拦截（勾选“免打扰时段内也发送”可强制发送）`, 'warn');
+      return;
+    }
+    if (within && force) {
+      log('免打扰时段内强制发送（已覆盖拦截）', 'warn');
+    }
+
+    /* 不支持 / 非安全上下文：降级页内卡片 */
+    if (!Notifier.supported || !Notifier.isSecureContext) {
+      const record = buildRecord(title, body, getIcon());
+      Notifier.showFallback(title, body, () => activateHistoryItem(record));
+      await persistRecord(record, { status: 'unsupported', attempts: 0 });
+      log('系统通知不可用，已通过页内卡片展示', 'warn');
+      return;
+    }
+
+    /* 无权限：不自动弹窗申请（必须由明确手势），引导用户点击申请按钮 */
+    if (Notifier.permissionState() !== 'granted') {
+      const record = buildRecord(title, body, getIcon());
+      Notifier.showFallback(title, body, () => activateHistoryItem(record));
+      await persistRecord(record, { status: 'denied', attempts: 0 });
+      log('通知权限未授予，已通过页内卡片展示；请点击“申请通知权限”按钮', 'err');
+      renderPermission();
+      return;
+    }
+
+    const record = buildRecord(title, body, getIcon());
+    els.sendBtn.disabled = true;
+    log(`发送通知「${title}」…`);
+    const result = await Notifier.send({
+      title: record.title, body: record.body, icon: record.icon,
+      tag: record.tag, data: record.data
+    }, {
+      onClick: n => {
+        log(`系统通知被点击：「${record.title}」`, 'ok');
+        Store.updateHistory(record.id, { status: 'clicked', clickedAt: Date.now() })
+          .then(renderHistory);
+        if (n) try { n.close(); } catch (e) { /* ignore */ }
+      },
+      lateError: err => {
+        log(`通知展示后发生错误：${err.message}`, 'err');
+        Store.updateHistory(record.id, { status: 'failed', error: err.message })
+          .then(renderHistory);
+      }
+    });
+    els.sendBtn.disabled = false;
+
+    if (result.ok) {
+      await persistRecord(record, { status: 'sent', attempts: result.attempts });
+      log(result.attempts > 1
+        ? `通知发送成功（第 ${result.attempts} 次重试后成功）` : '通知已发送', 'ok');
+    } else {
+      Notifier.showFallback(title, body, () => activateHistoryItem(record));
+      await persistRecord(record, {
+        status: 'failed', attempts: result.attempts,
+        error: result.error ? result.error.message : '未知错误'
+      });
+      log(`通知发送失败，已重试 ${result.attempts} 次；为避免遗漏，已展示页内卡片`, 'err');
+    }
+  }
+
+  function getIcon() {
+    return els.icon.checked ? Notifier.defaultIcon() : '';
   }
 
   /* ---------- 事件绑定 ---------- */
-  els.permBtn.addEventListener('click', async () => {
-    log('正在申请 Window Management 权限…');
-    const { granted, error } = await ScreenManager.requestAndEnumerate();
-    renderPermission();
-    renderScreens();
-    refreshPreview();
-    renderSavedLayouts();
-    if (granted) log('权限已授予，多屏幕枚举成功', 'ok');
-    else log(`权限未授予${error ? `（${error.message}）` : ''}，已降级为单窗口模式`, 'err');
-  });
-
-  document.querySelectorAll('.layout-btn').forEach(btn => {
-    btn.addEventListener('click', () => applyLayout(btn.dataset.layout));
-  });
-
-  els.closeAll.addEventListener('click', () => {
-    const n = WindowManager.closeAll();
-    lastAppliedRects = [];
-    refreshPreview();
-    log(`已关闭 ${n} 个窗口`);
-  });
-
-  els.saveBtn.addEventListener('click', saveLayout);
-
-  /* 屏幕变化（插拔显示器等）→ 重绘并提示 */
-  ScreenManager.onChange(() => {
-    renderScreens();
-    // 屏幕变化后现有窗口可能越界，重新检测
-    const openRects = WindowManager.getOpenWindows().map(m => m.rect);
-    const check = Layouts.checkBounds(openRects, ScreenManager.state.screens);
-    if (!check.ok) {
-      els.boundsWarning.textContent =
-        `屏幕环境变化后，${check.violations.length} 个窗口已越界，请重新应用布局。`;
-      els.boundsWarning.classList.remove('hidden');
-      refreshPreview(check.violations.map(v => v.index));
-    } else {
-      refreshPreview();
+  els.permBtn.addEventListener('click', async ev => {
+    /* 权限申请必须在用户手势内调用；requestPermission 内部已兜底异常，不会崩 */
+    if (!ev || !ev.isTrusted) {
+      log('权限申请需要真实的用户点击手势，已忽略非用户触发', 'warn');
+      return;
     }
-    renderSavedLayouts();
+    log('正在申请通知权限…');
+    const result = await Notifier.requestPermission();
+    renderPermission(result);
+    if (result === 'granted') log('通知权限已授予', 'ok');
+    else if (result === 'denied') log('通知权限被拒绝', 'err');
+    else if (result === 'unsupported') log('当前浏览器不支持 Notification API', 'err');
+    else log('权限申请未完成（浏览器未返回授权决定）', 'warn');
   });
 
-  /* 窗口被手动关闭 → 更新预览与提示 */
-  WindowManager.onChange(openWins => {
-    lastAppliedRects = openWins.map(m => m.rect);
-    refreshPreview();
-    log(`窗口状态更新：当前打开 ${openWins.length} 个窗口`);
+  els.sendBtn.addEventListener('click', handleSend);
+
+  let settingsTimer = 0;
+  function scheduleSettingsSave() {
+    clearTimeout(settingsTimer);
+    settingsTimer = setTimeout(() => {
+      const next = readSettingsFromUI();
+      if (!isValidHHMM(next.start) || !isValidHHMM(next.end)) {
+        log('时间格式无效，已忽略本次修改', 'err');
+        return;
+      }
+      saveSettings(next);
+    }, 150);
+  }
+  els.dndEnabled.addEventListener('change', () => {
+    const next = readSettingsFromUI();
+    saveSettings(next);
+    log(next.enabled ? '免打扰已启用' : '免打扰已关闭');
   });
+  els.dndStart.addEventListener('input', scheduleSettingsSave);
+  els.dndEnd.addEventListener('input', scheduleSettingsSave);
+
+  els.clearHistoryBtn.addEventListener('click', async () => {
+    try {
+      await Store.clearHistory();
+      renderHistory();
+      log('通知历史已清空');
+    } catch (e) {
+      log(`清空历史失败：${e.message}`, 'err');
+    }
+  });
+
+  /* 时区 / 夏令时变化：重算判断、重绘时间轴 */
+  DND.watchTimezone(info => {
+    kv(els.envTimezone,
+      `${info.timezone}（UTC${formatOffset(-info.newOffset)}）`);
+    renderDndStatus();
+    Timeline.redraw();
+    log(`检测到时区变化：${info.oldTimezone} → ${info.timezone}，已重新计算免打扰判断与时间轴`, 'warn');
+  });
+
+  /* 权限被撤销 / 重新授予：自动更新 UI（Permissions API change + 内部轮询兜底） */
+  Notifier.watchPermission(state => {
+    renderPermission(state);
+    log(`通知权限状态变化：${state}`, state === 'granted' ? 'ok' : 'warn');
+  }).then(stop => { window.addEventListener('pagehide', stop); });
+
+  /* 每秒刷新免打扰倒计时 / 当前时刻刻度；跨时段边界时自动切换状态 */
+  setInterval(() => {
+    renderDndStatus();
+    Timeline.redraw();
+  }, 1000);
 
   /* ---------- 初始化 ---------- */
   (async function init() {
-    await ScreenManager.queryPermission();
-    if (ScreenManager.state.permission === 'granted') {
-      await ScreenManager.requestAndEnumerate();
-    } else {
-      ScreenManager.fallbackScreens();
+    renderEnv();
+
+    /* 读取持久化的 DND 设置 */
+    try {
+      const saved = await Store.getSettings();
+      if (saved && typeof saved === 'object') {
+        settings = {
+          enabled: saved.enabled !== false,
+          start: isValidHHMM(saved.start) ? saved.start : DEFAULT_SETTINGS.start,
+          end: isValidHHMM(saved.end) ? saved.end : DEFAULT_SETTINGS.end
+        };
+      }
+    } catch (e) {
+      log(`读取免打扰设置失败，使用默认值：${e.message}`, 'warn');
     }
+    els.dndEnabled.checked = settings.enabled;
+    els.dndStart.value = settings.start;
+    els.dndEnd.value = settings.end;
+
+    Timeline.mount(els.canvas, settings);
+    renderDndStatus();
     renderPermission();
-    renderScreens();
-    refreshPreview();
-    renderSavedLayouts();
-    if (!ScreenManager.state.supported) {
-      log('浏览器不支持 Window Management API，已进入单窗口降级模式', 'err');
-    } else if (ScreenManager.state.permission === 'granted') {
-      log('权限已授予，屏幕枚举完成', 'ok');
+    renderHistory();
+
+    if (Store.isMemoryMode()) {
+      log('IndexedDB 不可用，历史与设置仅保存在内存中', 'warn');
+    }
+    if (!Notifier.supported) {
+      log('浏览器不支持 Notification API，将使用页内卡片降级', 'err');
+    } else if (!Notifier.isSecureContext) {
+      log('非安全上下文，Notification 不可用，将使用页内卡片降级（请通过 HTTPS 或 localhost 访问）', 'err');
     } else {
-      log('请点击“申请 Window Management 权限”按钮以枚举多屏幕（需要用户手势）');
+      log('点击“申请通知权限”开始（需要用户手势，页面加载不会自动申请）');
     }
   })();
 })();

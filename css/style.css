@@ -68,6 +68,15 @@ button.ghost { background: transparent; border: 1px solid #3a4566; color: #b8c1d
 button.ghost:hover { border-color: #5b6aa0; background: #1b2236; }
 button.danger { background: #c0392b; }
 button.danger:hover { background: #d14233; }
+button.small { padding: 4px 10px; font-size: 12px; }
+
+.meta-empty {
+  list-style: none;
+  color: #6b7494;
+  font-size: 13px;
+  padding: 14px;
+  text-align: center;
+}
 
 .badge {
   display: inline-block;
